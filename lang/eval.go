@@ -244,11 +244,17 @@ func (s *Scope) evalContext(refs []*addrs.Reference, selfAddr addrs.Referenceabl
 			case addrs.IntKey:
 				self = val.Index(cty.NumberIntVal(int64(k)))
 			case addrs.StringKey:
-				self = val.Index(cty.StringVal(string(k)))
+				switch {
+				case val.Type().IsMapType():
+					self = val.Index(cty.StringVal(string(k)))
+				case val.Type().IsObjectType():
+					self = val.GetAttr(string(k))
+				default:
+					panic(fmt.Sprintf("unexpected value type: %#v", val.Type()))
+				}
 			default:
 				self = val
 			}
-
 			continue
 		}
 
