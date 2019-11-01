@@ -14,7 +14,6 @@ import (
 	"github.com/ucloud/ucloud-sdk-go/ucloud"
 	ufsdk "github.com/ufilesdk-dev/ufile-gosdk"
 	"log"
-	"strings"
 	"time"
 )
 
@@ -98,8 +97,7 @@ func (c *RemoteClient) Lock(info *state.LockInfo) (string, error) {
 	buffer := bufio.NewWriter(bytes.NewBuffer(buf))
 	err = reqFile.DownloadFile(buffer, c.lockFile)
 	if err != nil {
-		errMessage := fmt.Sprintf("%s", err)
-		if !strings.Contains(errMessage, "404") {
+		if !(reqFile.LastResponseStatus == 404) {
 			return "", fmt.Errorf("lock file %s exists, err", c.lockFile)
 		}
 	}
@@ -191,8 +189,7 @@ func (c *RemoteClient) getObject(file string) (payload *remote.Payload, exist bo
 	buffer := bufio.NewWriter(bytes.NewBuffer(buf))
 	err = reqFile.DownloadFile(buffer, file)
 	if err != nil {
-		errMessage := fmt.Sprintf("%s", err)
-		if strings.Contains(errMessage, "404") {
+		if reqFile.LastResponseStatus == 404 {
 			return nil, false, nil
 		}
 		return
