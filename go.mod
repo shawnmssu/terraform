@@ -115,6 +115,8 @@ require (
 	github.com/spf13/afero v1.2.1
 	github.com/terraform-providers/terraform-provider-openstack v1.15.0
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20171017195756-830351dc03c6 // indirect
+	github.com/ucloud/ucloud-sdk-go v0.12.0
+	github.com/ufilesdk-dev/ufile-gosdk v0.0.0-20190730023212-866b183392c4
 	github.com/ugorji/go v0.0.0-20180813092308-00b869d2f4a5 // indirect
 	github.com/vmihailenco/msgpack v4.0.1+incompatible // indirect
 	github.com/xanzy/ssh-agent v0.2.1

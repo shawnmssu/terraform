@@ -26,6 +26,7 @@ func TestInit_backend(t *testing.T) {
 		{"s3", "*s3.Backend"},
 		{"swift", "*swift.Backend"},
 		{"azure", "init.deprecatedBackendShim"},
+		{"ufile", "ufile.Backend"},
 	}
 
 	// Make sure we get the requested backend

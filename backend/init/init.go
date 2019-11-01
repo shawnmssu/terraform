@@ -26,6 +26,7 @@ import (
 	backendPg "github.com/hashicorp/terraform/backend/remote-state/pg"
 	backendS3 "github.com/hashicorp/terraform/backend/remote-state/s3"
 	backendSwift "github.com/hashicorp/terraform/backend/remote-state/swift"
+	backendUFile "github.com/hashicorp/terraform/backend/remote-state/ufile"
 )
 
 // backends is the list of available backends. This is a global variable
@@ -67,6 +68,7 @@ func Init(services *disco.Disco) {
 		"pg":          func() backend.Backend { return backendPg.New() },
 		"s3":          func() backend.Backend { return backendS3.New() },
 		"swift":       func() backend.Backend { return backendSwift.New() },
+		"ufile":       func() backend.Backend { return backendUFile.New() },
 
 		// Deprecated backends.
 		"azure": func() backend.Backend {
