@@ -3,7 +3,6 @@ package ufile
 import (
 	"errors"
 	"fmt"
-	ufsdk "github.com/ufilesdk-dev/ufile-gosdk"
 	"path"
 	"sort"
 	"strings"
@@ -26,7 +25,6 @@ func (b *Backend) remoteClient(name string) (*remoteClient, error) {
 
 	client := &remoteClient{
 		ufileClient: b.ufileClient,
-		ufileConfig: b.ufileConfig,
 		tagClient:   b.tagClient,
 		bucketName:  b.bucketName,
 		stateFile:   b.stateFile(name),
@@ -42,16 +40,11 @@ func (b *Backend) Workspaces() ([]string, error) {
 		prefix = b.prefix + "/"
 	}
 
-	reqFile, err := ufsdk.NewFileRequest(b.ufileConfig, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error on building file request, %s", err)
-	}
-
 	wss := []string{backend.DefaultStateName}
 	var limit = 20
 	var marker string
 	for {
-		resp, err := reqFile.PrefixFileList(prefix, marker, limit)
+		resp, err := b.ufileClient.PrefixFileList(prefix, marker, limit)
 		if err != nil {
 			return nil, fmt.Errorf("error on reading file list by prefix, %s", err)
 		}

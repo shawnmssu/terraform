@@ -11,14 +11,12 @@ import (
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/state/remote"
 	"github.com/ucloud/ucloud-sdk-go/private/services/ubusinessgroup"
-	"github.com/ucloud/ucloud-sdk-go/services/ufile"
 	"github.com/ucloud/ucloud-sdk-go/ucloud"
 	ufsdk "github.com/ufilesdk-dev/ufile-gosdk"
 )
 
 type remoteClient struct {
-	ufileClient *ufile.UFileClient
-	ufileConfig *ufsdk.Config
+	ufileClient *ufsdk.UFileRequest
 	tagClient   *ubusinessgroup.UBusinessGroupClient
 	bucketName  string
 	stateFile   string
@@ -165,22 +163,18 @@ func (c *remoteClient) lockInfo() (*state.LockInfo, error) {
 }
 
 func (c *remoteClient) putObject(file string, data []byte) error {
-	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
-	if err != nil {
-		return fmt.Errorf("error on building file request, %s", err)
-	}
-	state, err := reqFile.InitiateMultipartUpload(file, "application/json")
+	state, err := c.ufileClient.InitiateMultipartUpload(file, "application/json")
 	if err != nil {
 		return fmt.Errorf("error on initing upload file, %s", err)
 	}
 
-	if err := reqFile.UploadPart(bytes.NewBuffer(data), state, 0); err != nil {
+	if err := c.ufileClient.UploadPart(bytes.NewBuffer(data), state, 0); err != nil {
 		// ignore err
-		_ = reqFile.AbortMultipartUpload(state)
+		_ = c.ufileClient.AbortMultipartUpload(state)
 		return fmt.Errorf("error on uploading file, %s", err)
 	}
 
-	if err := reqFile.FinishMultipartUpload(state); err != nil {
+	if err := c.ufileClient.FinishMultipartUpload(state); err != nil {
 		return fmt.Errorf("error on finishing upload file, %s", err)
 	}
 
@@ -188,24 +182,19 @@ func (c *remoteClient) putObject(file string, data []byte) error {
 }
 
 func (c *remoteClient) getObject(file string) (payload *remote.Payload, exist bool, err error) {
-	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
-	if err != nil {
-		err = fmt.Errorf("error on building file request, %s", err)
-		return
-	}
 	var buf []byte
 	buffer := bufio.NewWriter(bytes.NewBuffer(buf))
-	err = reqFile.DownloadFile(buffer, file)
+	err = c.ufileClient.DownloadFile(buffer, file)
 	if err != nil {
-		if reqFile.LastResponseStatus == 404 {
+		if c.ufileClient.LastResponseStatus == 404 {
 			return nil, false, nil
 		}
 		return
 	}
 	exist = true
-	sum := md5.Sum(reqFile.LastResponseBody)
+	sum := md5.Sum(c.ufileClient.LastResponseBody)
 	payload = &remote.Payload{
-		Data: reqFile.LastResponseBody,
+		Data: c.ufileClient.LastResponseBody,
 		MD5:  sum[:],
 	}
 
@@ -213,12 +202,7 @@ func (c *remoteClient) getObject(file string) (payload *remote.Payload, exist bo
 }
 
 func (c *remoteClient) deleteObject(file string) error {
-	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
-	if err != nil {
-		return fmt.Errorf("error on building file request, %s", err)
-	}
-
-	if err := reqFile.DeleteFile(file); err != nil {
+	if err := c.ufileClient.DeleteFile(file); err != nil {
 		return fmt.Errorf("error on deleting file, %s", err)
 	}
 	return nil

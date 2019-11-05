@@ -108,8 +108,7 @@ type Backend struct {
 	*schema.Backend
 
 	// The fields below are set from configure
-	ufileClient *ufile.UFileClient
-	ufileConfig *ufsdk.Config
+	ufileClient *ufsdk.UFileRequest
 	tagClient   *ubusinessgroup.UBusinessGroupClient
 
 	bucketName string
@@ -140,7 +139,6 @@ func (b *Backend) configure(ctx context.Context) error {
 	cred.PrivateKey = d.Get("private_key").(string)
 
 	ufileClient := ufile.NewClient(&cfg, &cred)
-	b.ufileClient = ufileClient
 	b.tagClient = ubusinessgroup.NewClient(&cfg, &cred)
 
 	// set the ufile config
@@ -167,7 +165,12 @@ func (b *Backend) configure(ctx context.Context) error {
 		BucketHost: bucketHost,
 	}
 
-	b.ufileConfig = config
+	reqFile, err := ufsdk.NewFileRequest(config, nil)
+	if err != nil {
+		return fmt.Errorf("Failed to build UFile request, %s", err)
+	}
+
+	b.ufileClient = reqFile
 
 	return nil
 }
