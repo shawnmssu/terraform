@@ -19,12 +19,12 @@ const (
 )
 
 // get a remote client configured for this state
-func (b *Backend) remoteClient(name string) (*RemoteClient, error) {
+func (b *Backend) remoteClient(name string) (*remoteClient, error) {
 	if name == "" {
 		return nil, errors.New("missing state name")
 	}
 
-	client := &RemoteClient{
+	client := &remoteClient{
 		ufileClient: b.ufileClient,
 		ufileConfig: b.ufileConfig,
 		tagClient:   b.tagClient,
@@ -44,7 +44,7 @@ func (b *Backend) Workspaces() ([]string, error) {
 
 	reqFile, err := ufsdk.NewFileRequest(b.ufileConfig, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error on building file request, %s", err)
 	}
 
 	wss := []string{backend.DefaultStateName}
@@ -53,7 +53,7 @@ func (b *Backend) Workspaces() ([]string, error) {
 	for {
 		resp, err := reqFile.PrefixFileList(prefix, marker, limit)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error on reading file list by prefix, %s", err)
 		}
 
 		if len(resp.DataSet) < 1 {
@@ -126,7 +126,7 @@ func (b *Backend) StateMgr(name string) (state.State, error) {
 		lockInfo.Operation = "init"
 		lockId, err := client.Lock(lockInfo)
 		if err != nil {
-			return nil, fmt.Errorf("failed to lock s3 state: %s", err)
+			return nil, fmt.Errorf("failed to lock ufile state: %s", err)
 		}
 
 		// Local helper function so we can call it multiple places

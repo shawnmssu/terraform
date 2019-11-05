@@ -76,8 +76,8 @@ func New() backend.Backend {
 				Default:     "env:",
 				ValidateFunc: func(v interface{}, s string) ([]string, []error) {
 					prefix := v.(string)
-					if strings.HasPrefix(prefix, "/") || strings.HasPrefix(prefix, "./") {
-						return nil, []error{fmt.Errorf("prefix must not start with '/' or './'")}
+					if strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") {
+						return nil, []error{fmt.Errorf("prefix must not start or end with '/'")}
 					}
 					return nil, nil
 				},
@@ -125,11 +125,10 @@ func (b *Backend) configure(ctx context.Context) error {
 	b.prefix = d.Get("prefix").(string)
 
 	cfg := ucloud.NewConfig()
-
 	cfg.Region = d.Get("region").(string)
 	cfg.ProjectId = d.Get("project_id").(string)
-
 	cfg.UserAgent = fmt.Sprintf("Backend-UCloud/%s", version.Version)
+
 	// set default max retry count
 	cfg.MaxRetries = 3
 	if v, ok := d.GetOk("base_url"); ok {

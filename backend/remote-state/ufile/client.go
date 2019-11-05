@@ -6,6 +6,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/go-uuid"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/state/remote"
@@ -13,11 +14,9 @@ import (
 	"github.com/ucloud/ucloud-sdk-go/services/ufile"
 	"github.com/ucloud/ucloud-sdk-go/ucloud"
 	ufsdk "github.com/ufilesdk-dev/ufile-gosdk"
-	"log"
-	"time"
 )
 
-type RemoteClient struct {
+type remoteClient struct {
 	ufileClient *ufile.UFileClient
 	ufileConfig *ufsdk.Config
 	tagClient   *ubusinessgroup.UBusinessGroupClient
@@ -26,128 +25,135 @@ type RemoteClient struct {
 	lockFile    string
 }
 
-var (
-	// The amount of time we will retry a state waiting for it to match the
-	// expected checksum.
-	consistencyRetryTimeout = 10 * time.Second
-
-	// delay when polling the state
-	consistencyRetryPollInterval = 2 * time.Second
-)
-
 const lockPrefix = "terraform-lock"
 
-func (c *RemoteClient) Get() (payload *remote.Payload, err error) {
-	deadline := time.Now().Add(consistencyRetryTimeout)
-
-	for {
-		payload, _, err = c.getObject(c.stateFile)
-		if err != nil {
-			log.Printf("[WARN] failed to Get UFile: %s", err)
-			if time.Now().Before(deadline) {
-				time.Sleep(consistencyRetryPollInterval)
-				log.Println("[INFO] retrying get UFile...")
-				continue
-			}
-
-			return nil, fmt.Errorf("err on geting ufile %s", err)
-		}
-		break
+func (c *remoteClient) Get() (payload *remote.Payload, err error) {
+	payload, exist, err := c.getObject(c.stateFile)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to geting state file at %v: %s", c.stateFileURL(), err)
 	}
-	return payload, err
+
+	if !exist {
+		return nil, nil
+	}
+
+	return payload, nil
 }
 
-func (c *RemoteClient) Put(data []byte) error {
+func (c *remoteClient) Put(data []byte) error {
 	if err := c.putObject(c.stateFile, data); err != nil {
-		return fmt.Errorf("Failed to upload state to %v: %v", c.stateFile, err)
+		return fmt.Errorf("Failed to upload state file to %v: %s", c.stateFileURL(), err)
 	}
 
 	return nil
 }
 
-func (c *RemoteClient) Delete() error {
+func (c *remoteClient) Delete() error {
 	if err := c.deleteObject(c.stateFile); err != nil {
-		return fmt.Errorf("Failed to delete state to %v: %v", c.stateFile, err)
+		return fmt.Errorf("Failed to delete state file to %v: %s", c.stateFileURL(), err)
 	}
 	return nil
 }
 
-func (c *RemoteClient) Lock(info *state.LockInfo) (string, error) {
-	log.Printf("[DEBUG] lock remote state file %s", c.lockFile)
+func (c *remoteClient) delete() error {
+	if err := c.deleteObject(c.stateFile); err != nil {
+		return fmt.Errorf("Failed to delete state file to %v: %s", c.stateFileURL(), err)
+	}
+	return nil
+}
 
+func (c *remoteClient) Lock(info *state.LockInfo) (string, error) {
 	key := fmt.Sprintf("%s:%s:%s", lockPrefix, c.bucketName, c.lockFile)
-	//key := fmt.Sprintf("%s:%s", lockPrefix, md5.Sum([]byte(path)))
-	if err := c.CreateTag(key); err != nil {
-		return "", err
-	}
 
-	tagId, err := c.DescribeTag(key)
+	tagId, err := c.ufileLock(key)
 	if err != nil {
-		return "", err
+		return "", c.lockError(err)
 	}
 
-	defer c.DeleteTag(tagId)
-
-	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
+	_, exist, err := c.getObject(c.lockFile)
 	if err != nil {
-		return "", err
+		err = fmt.Errorf("Failed to geting lock file at %v: %s", c.lockFileURL(), err)
 	}
-	// get
-	var buf []byte
-	buffer := bufio.NewWriter(bytes.NewBuffer(buf))
-	err = reqFile.DownloadFile(buffer, c.lockFile)
-	if err != nil {
-		if !(reqFile.LastResponseStatus == 404) {
-			return "", fmt.Errorf("lock file %s exists, err", c.lockFile)
-		}
+	if exist {
+		err = fmt.Errorf("Lock file exist at %v", c.lockFileURL())
 	}
 
-	info.Path = c.lockFile
+	if err != nil {
+		return "", c.lockError(c.ufileUnlock(tagId, err))
+	}
+
+	info.Path = c.lockFileURL()
 
 	if info.ID == "" {
 		lockID, err := uuid.GenerateUUID()
 		if err != nil {
-			return "", err
+			return "", c.lockError(c.ufileUnlock(tagId, err))
 		}
 
 		info.ID = lockID
 	}
 
-	//check := fmt.Sprintf("%x", md5.Sum(info.Marshal()))
-	err = c.putObject(c.lockFile, info.Marshal())
-	if err != nil {
-		return "", err
+	if c.putObject(c.lockFile, info.Marshal()) != nil {
+		err = fmt.Errorf("Failed to put lock file at %v: %s", c.lockFileURL(), err)
+		return "", c.lockError(c.ufileUnlock(tagId, err))
+	}
+
+	if err = c.ufileUnlock(tagId, nil); err != nil {
+		return "", c.lockError(err)
 	}
 
 	return info.ID, nil
 }
 
-func (c *RemoteClient) Unlock(id string) error {
-	info, err := c.getLockInfo()
+func (c *remoteClient) Unlock(id string) error {
+	info, err := c.lockInfo()
 	if err != nil {
-		return err
+		return c.lockError(err)
 	}
 
 	if info.ID != id {
-		return fmt.Errorf("lock id mismatch, %v != %v", info.ID, id)
+		return c.lockError(fmt.Errorf("lock ID %q does not match existing lock %q", id, info.ID))
 	}
 
 	err = c.deleteObject(c.lockFile)
 	if err != nil {
-		return err
+		return c.lockError(err)
 	}
 
-	return nil
+	key := fmt.Sprintf("%s:%s:%s", lockPrefix, c.bucketName, c.lockFile)
+	tagId, err := c.DescribeTag(key)
+	if err != nil {
+		if isNotExistError(err) {
+			return nil
+		}
+		return c.lockError(err)
+	}
+
+	return c.DeleteTag(tagId)
 }
 
-func (c *RemoteClient) getLockInfo() (*state.LockInfo, error) {
+func (c *remoteClient) lockError(err error) *state.LockError {
+	lockErr := &state.LockError{
+		Err: err,
+	}
+
+	info, infoErr := c.lockInfo()
+	if infoErr != nil {
+		lockErr.Err = multierror.Append(lockErr.Err, infoErr)
+	} else {
+		lockErr.Info = info
+	}
+	return lockErr
+}
+
+func (c *remoteClient) lockInfo() (*state.LockInfo, error) {
 	payload, exist, err := c.getObject(c.lockFile)
 	if err != nil {
 		return nil, err
 	}
 
 	if !exist {
-		return nil, fmt.Errorf("lock file %s not exists", c.lockFile)
+		return nil, newNotExistError(fmt.Sprintf("lock file %s", c.lockFile))
 	}
 
 	info := &state.LockInfo{}
@@ -158,31 +164,33 @@ func (c *RemoteClient) getLockInfo() (*state.LockInfo, error) {
 	return info, nil
 }
 
-func (c *RemoteClient) putObject(file string, data []byte) error {
+func (c *remoteClient) putObject(file string, data []byte) error {
 	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("error on building file request, %s", err)
 	}
 	state, err := reqFile.InitiateMultipartUpload(file, "application/json")
 	if err != nil {
-		return fmt.Errorf("error on upload file, %s, details: %s", err, reqFile.DumpResponse(true))
+		return fmt.Errorf("error on initing upload file, %s", err)
 	}
 
 	if err := reqFile.UploadPart(bytes.NewBuffer(data), state, 0); err != nil {
-		reqFile.AbortMultipartUpload(state)
-		return err
+		// ignore err
+		_ = reqFile.AbortMultipartUpload(state)
+		return fmt.Errorf("error on uploading file, %s", err)
 	}
 
 	if err := reqFile.FinishMultipartUpload(state); err != nil {
-		return err
+		return fmt.Errorf("error on finishing upload file, %s", err)
 	}
 
 	return err
 }
 
-func (c *RemoteClient) getObject(file string) (payload *remote.Payload, exist bool, err error) {
+func (c *remoteClient) getObject(file string) (payload *remote.Payload, exist bool, err error) {
 	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
 	if err != nil {
+		err = fmt.Errorf("error on building file request, %s", err)
 		return
 	}
 	var buf []byte
@@ -204,31 +212,60 @@ func (c *RemoteClient) getObject(file string) (payload *remote.Payload, exist bo
 	return
 }
 
-func (c *RemoteClient) deleteObject(file string) error {
+func (c *remoteClient) deleteObject(file string) error {
 	reqFile, err := ufsdk.NewFileRequest(c.ufileConfig, nil)
 	if err != nil {
-		return fmt.Errorf("error on building delete file request, %s", err)
+		return fmt.Errorf("error on building file request, %s", err)
 	}
 
 	if err := reqFile.DeleteFile(file); err != nil {
-		return err
+		return fmt.Errorf("error on deleting file, %s", err)
 	}
 	return nil
 }
 
-func (c *RemoteClient) CreateTag(key string) error {
+func (c *remoteClient) ufileLock(key string) (string, error) {
+	if err := c.CreateTag(key); err != nil {
+		return "", err
+	}
+
+	tagId, err := c.DescribeTag(key)
+	if err != nil {
+		return "", err
+	}
+
+	return tagId, nil
+}
+
+func (c *remoteClient) ufileUnlock(tagId string, err error) error {
+	errTag := c.DeleteTag(tagId)
+	if err != nil {
+		if errTag != nil {
+			return c.lockError(fmt.Errorf("%v, delete tag err: %s", err, errTag))
+		}
+		return c.lockError(err)
+	}
+
+	if errTag != nil {
+		return errTag
+	}
+
+	return nil
+}
+
+func (c *remoteClient) CreateTag(key string) error {
 	request := c.tagClient.NewCreateBusinessGroupRequest()
 	request.BusinessName = ucloud.String(key)
 
 	_, err := c.tagClient.CreateBusinessGroup(request)
 	if err != nil {
-		return err
+		return fmt.Errorf("err on creating tag, %s", err)
 	}
 
 	return nil
 }
 
-func (c *RemoteClient) DescribeTag(key string) (string, error) {
+func (c *remoteClient) DescribeTag(key string) (string, error) {
 	req := c.tagClient.NewListBusinessGroupRequest()
 
 	var allInstances []ubusinessgroup.BusinessGroupInfo
@@ -261,18 +298,45 @@ func (c *RemoteClient) DescribeTag(key string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("not found error")
+	return "", newNotExistError("tag")
 }
 
-func (c *RemoteClient) DeleteTag(tagId string) error {
+func (c *remoteClient) DeleteTag(tagId string) error {
 	request := c.tagClient.NewDeleteBusinessGroupRequest()
 	request.BusinessId = ucloud.String(tagId)
 
 	_, err := c.tagClient.DeleteBusinessGroup(request)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("err on deleting tag, %s", err)
 	}
 
 	return nil
+}
+
+func (c *remoteClient) stateFileURL() string {
+	return fmt.Sprintf("ufile://%v/%v", c.bucketName, c.stateFile)
+}
+
+func (c *remoteClient) lockFileURL() string {
+	return fmt.Sprintf("ufile://%v/%v", c.bucketName, c.lockFile)
+}
+
+type notExistError struct {
+	message string
+}
+
+func (e *notExistError) Error() string {
+	return e.message
+}
+
+func newNotExistError(v string) error {
+	return &notExistError{fmt.Sprintf("the %s is not exist", v)}
+}
+
+func isNotExistError(err error) bool {
+	if _, ok := err.(*notExistError); ok {
+		return true
+	}
+	return false
 }
