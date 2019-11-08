@@ -75,7 +75,6 @@ func (c *remoteClient) Lock(info *state.LockInfo) (string, error) {
 	if exist {
 		err = fmt.Errorf("Lock file exist at %v", c.lockFileURL())
 	}
-
 	if err != nil {
 		return "", c.lockError(c.ufileUnlock(tagId, err))
 	}
@@ -178,7 +177,7 @@ func (c *remoteClient) putObject(file string, data []byte) error {
 		return fmt.Errorf("error on finishing upload file, %s", err)
 	}
 
-	return err
+	return nil
 }
 
 func (c *remoteClient) getObject(file string) (payload *remote.Payload, exist bool, err error) {

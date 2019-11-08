@@ -108,8 +108,9 @@ type Backend struct {
 	*schema.Backend
 
 	// The fields below are set from configure
-	ufileClient *ufsdk.UFileRequest
-	tagClient   *ubusinessgroup.UBusinessGroupClient
+	ufileBucketClient *ufile.UFileClient
+	ufileClient       *ufsdk.UFileRequest
+	tagClient         *ubusinessgroup.UBusinessGroupClient
 
 	bucketName string
 	keyName    string
@@ -124,7 +125,8 @@ func (b *Backend) configure(ctx context.Context) error {
 	b.prefix = d.Get("prefix").(string)
 
 	cfg := ucloud.NewConfig()
-	cfg.Region = d.Get("region").(string)
+	region := d.Get("region").(string)
+	cfg.Region = region
 	cfg.ProjectId = d.Get("project_id").(string)
 	cfg.UserAgent = fmt.Sprintf("Backend-UCloud/%s", version.Version)
 
@@ -138,7 +140,7 @@ func (b *Backend) configure(ctx context.Context) error {
 	cred.PublicKey = d.Get("public_key").(string)
 	cred.PrivateKey = d.Get("private_key").(string)
 
-	ufileClient := ufile.NewClient(&cfg, &cred)
+	b.ufileBucketClient = ufile.NewClient(&cfg, &cred)
 	b.tagClient = ubusinessgroup.NewClient(&cfg, &cred)
 
 	// set the ufile config
@@ -151,17 +153,23 @@ func (b *Backend) configure(ctx context.Context) error {
 		bucketHost = "api.ucloud.cn"
 	}
 
-	domain, err := queryBucket(ufileClient, d.Get("bucket").(string))
-	if err != nil {
-		return fmt.Errorf("Failed to query bucket, %s", err)
+	//domain, err := queryBucket(b.ufileBucketClient, d.Get("bucket").(string))
+	//if err != nil {
+	//	return fmt.Errorf("Failed to query bucket, %s", err)
+	//}
+	//
+	//fileHost := strings.SplitN(domain, ".", 2)[1]
+	var convertedRegion string
+	if v, ok := regionForFileMap[region]; ok {
+		convertedRegion = v
+	} else {
+		convertedRegion = region
 	}
-
-	fileHost := strings.SplitN(domain, ".", 2)[1]
 	config := &ufsdk.Config{
 		PublicKey:  d.Get("public_key").(string),
 		PrivateKey: d.Get("private_key").(string),
 		BucketName: d.Get("bucket").(string),
-		FileHost:   fileHost,
+		FileHost:   fmt.Sprintf(convertedRegion + ".ufileos.com"),
 		BucketHost: bucketHost,
 	}
 
@@ -175,17 +183,22 @@ func (b *Backend) configure(ctx context.Context) error {
 	return nil
 }
 
-func queryBucket(conn *ufile.UFileClient, bucketName string) (string, error) {
-	req := conn.NewDescribeBucketRequest()
-	req.BucketName = ucloud.String(bucketName)
-	resp, err := conn.DescribeBucket(req)
-	if err != nil {
-		return "", fmt.Errorf("error on reading bucket %q when create bucket, %s", bucketName, err)
-	}
-
-	if len(resp.DataSet) < 1 {
-		return "", fmt.Errorf("the bucket %s is not exit", bucketName)
-	}
-
-	return resp.DataSet[0].Domain.Src[0], nil
+var regionForFileMap = map[string]string{
+	"cn-bj2": "cn-bj",
+	"cn-bj1": "cn-bj",
 }
+
+//func queryBucket(conn *ufile.UFileClient, bucketName string) (string, error) {
+//	req := conn.NewDescribeBucketRequest()
+//	req.BucketName = ucloud.String(bucketName)
+//	resp, err := conn.DescribeBucket(req)
+//	if err != nil {
+//		return "", fmt.Errorf("error on reading bucket %q when create bucket, %s", bucketName, err)
+//	}
+//
+//	if len(resp.DataSet) < 1 {
+//		return "", fmt.Errorf("the bucket %s is not exit", bucketName)
+//	}
+//
+//	return resp.DataSet[0].Domain.Src[0], nil
+//}

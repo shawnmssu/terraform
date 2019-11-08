@@ -3,14 +3,13 @@ package ufile
 import (
 	"errors"
 	"fmt"
-	"path"
-	"sort"
-	"strings"
-
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/state/remote"
 	"github.com/hashicorp/terraform/states"
+	"path"
+	"sort"
+	"strings"
 )
 
 const (
@@ -35,16 +34,11 @@ func (b *Backend) remoteClient(name string) (*remoteClient, error) {
 }
 
 func (b *Backend) Workspaces() ([]string, error) {
-	var prefix string
-	if b.prefix != "" {
-		prefix = b.prefix + "/"
-	}
-
 	wss := []string{backend.DefaultStateName}
 	var limit = 20
 	var marker string
 	for {
-		resp, err := b.ufileClient.PrefixFileList(prefix, marker, limit)
+		resp, err := b.ufileClient.PrefixFileList(b.prefix, marker, limit)
 		if err != nil {
 			return nil, fmt.Errorf("error on reading file list by prefix, %s", err)
 		}
@@ -54,7 +48,11 @@ func (b *Backend) Workspaces() ([]string, error) {
 		}
 
 		for _, v := range resp.DataSet {
-			parts := strings.Split(strings.TrimPrefix(v.FileName, prefix), "/")
+			if path.Join(b.prefix, b.keyName) == v.FileName {
+				// filter the default workspace
+				continue
+			}
+			parts := strings.Split(strings.TrimPrefix(v.FileName, b.prefix+"/"), "/")
 			if len(parts) > 0 && parts[0] != "" {
 				wss = append(wss, parts[0])
 			}
@@ -162,7 +160,7 @@ func (b *Backend) StateMgr(name string) (state.State, error) {
 
 func (b *Backend) stateFile(name string) string {
 	if name == backend.DefaultStateName {
-		//TODO:
+		//TODO:path.Join(b.prefix, b.keyName+stateFileSuffix)
 		return path.Join(b.prefix, b.keyName)
 	}
 
